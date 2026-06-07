@@ -1,0 +1,30 @@
+name: air_canvas_flutter_b
+description: >
+  Virtual Air-Canvas Presentation Remote – UI Canvas & Automation Layer.
+  Developer B component. Receives WebSocket data from the Python CV engine
+  (Developer A) and renders an interactive drawing overlay on top of the
+  presenter's screen, forwarding swipe commands to PowerPoint via Win32.
+
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # WebSocket client – connects to Developer A's Python server at ws://localhost:8765
+  web_socket_channel: ^2.4.5
+
+  # Transparent, borderless, always-on-top window control for Windows Desktop
+  window_manager: ^0.3.9
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
