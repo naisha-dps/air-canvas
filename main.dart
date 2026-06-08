@@ -1,33 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
-
-// Import the canvas page we just built!
-import 'aircanvas.dart'; 
+import 'aircanvas.dart'; // Imports the canvas page below
 
 Future<void> main() async {
-  // Required for Flutter desktop apps interacting with the native OS
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Initialize the window manager
   await windowManager.ensureInitialized();
 
   const WindowOptions windowOptions = WindowOptions(
-    size: Size(1920, 1080), // Fallback size
-    backgroundColor: Colors.transparent, // Make the window invisible!
-    titleBarStyle: TitleBarStyle.hidden, // Remove the top drag bar (X, minimize, etc.)
-    alwaysOnTop: true, // Never let another app cover this canvas
-    skipTaskbar: true, // Don't show an icon in the bottom taskbar
+    backgroundColor: Colors.transparent, // Glass background
+    titleBarStyle: TitleBarStyle.hidden, // No top bar
+    alwaysOnTop: true, // Stays above PowerPoint/Chrome
+    skipTaskbar: false, // Allows her to right-click -> Quit from the taskbar
     windowButtonVisibility: false,
   );
 
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
-    // Force the transparent window to fill the entire monitor
-    await windowManager.setFullScreen(true);
-
-    // 🚀 THE SECRET SAUCE: 
-    // This tells the OS to pass all mouse clicks straight through our app to the desktop below.
-    await windowManager.setIgnoreMouseEvents(true);
-
+    await windowManager.maximize(); // Stretches across her Windows monitor
+    await windowManager.setIgnoreMouseEvents(true); // Ghost mode (clicks pass through)
     await windowManager.show();
     await windowManager.focus();
   });
@@ -35,18 +24,14 @@ Future<void> main() async {
   runApp(const AirCanvasApp());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Root Application Widget
-// ─────────────────────────────────────────────────────────────────────────────
 class AirCanvasApp extends StatelessWidget {
   const AirCanvasApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Air Canvas Test Build',
+      title: 'Air Canvas',
       debugShowCheckedModeBanner: false,
-      // We must explicitly set the scaffold background to transparent here too
       theme: ThemeData(
         scaffoldBackgroundColor: Colors.transparent,
         colorScheme: ColorScheme.fromSeed(
@@ -54,7 +39,7 @@ class AirCanvasApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const CanvasPage(), 
+      home: const AirCanvasPage(), 
     );
   }
 }
