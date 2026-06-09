@@ -39,6 +39,10 @@ const double _kReticleRadius = 14.0;
 // Minimum distance between successive draw points to avoid overdraw.
 const double _kMinPointDistance = 5.0;
 
+// EMA smoothing factor for cursor position (0 = frozen, 1 = no smoothing).
+// Lower values filter more jitter but add more lag to fast movements.
+const double _kCursorSmoothing = 0.25;
+
 // Stroke smoothing: we store raw points and use quadratic bezier splines.
 // Number of points to keep in a single "stroke segment" before starting fresh.
 const int _kMaxSegmentLength = 512;
@@ -168,12 +172,24 @@ class _CanvasPageState extends State<CanvasPage> {
     final List<dynamic>? coordsRaw = packet['coords'] as List<dynamic>?;
 
     // Normalised cursor (0.0–1.0); default to last known position on null.
-    final Offset cursorNorm = coordsRaw != null && coordsRaw.length == 2
+    final Offset rawCursor = coordsRaw != null && coordsRaw.length == 2
         ? Offset(
             (coordsRaw[0] as num).toDouble().clamp(0.0, 1.0),
             (coordsRaw[1] as num).toDouble().clamp(0.0, 1.0),
           )
         : _cursorNorm;
+
+    // EMA low-pass filter: smooths out per-frame landmark jitter while
+    // still tracking intentional movement. Skip on first frame so the
+    // cursor doesn't drag in from (0,0).
+    final Offset cursorNorm = _cursorNorm == Offset.zero
+        ? rawCursor
+        : Offset(
+            _kCursorSmoothing * rawCursor.dx +
+                (1 - _kCursorSmoothing) * _cursorNorm.dx,
+            _kCursorSmoothing * rawCursor.dy +
+                (1 - _kCursorSmoothing) * _cursorNorm.dy,
+          );
 
     // Reset hold timer whenever pose leaves CLEAR.
     if (state != 'CLEAR' && _clearHoldStart != null) {
