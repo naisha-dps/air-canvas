@@ -1,129 +1,180 @@
 import asyncio
-import websockets
 import json
+import os
+import sys
+import threading
+import time
+import urllib.request
+
 import cv2
 import mediapipe as mp
-import threading
+import websockets
 
-# 🌍 GLOBAL SHARED STATE
-# This dictionary acts as the bridge. The Camera thread constantly updates it, 
-# and the Server thread constantly reads it to send to Flutter.
-ai_state = {
-    "state": "HOVER",
-    "coords": [0.5, 0.5]
-}
+# ── Model auto-download ───────────────────────────────────────────────────────
+# MediaPipe Tasks API requires a .task model file (not bundled with the pip package).
+MODEL_PATH = "hand_landmarker.task"
+MODEL_URL  = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+)
+
+def _ensure_model():
+    if os.path.exists(MODEL_PATH):
+        return
+    print("📥  Downloading hand landmark model (~8 MB) — one-time setup …")
+    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+    print("    Done.\n")
+
+# ── Global shared state ───────────────────────────────────────────────────────
+# Camera thread writes; WebSocket thread reads. Simple enough that a lock is
+# not required — worst case is one stale frame being sent.
+ai_state = {"state": "HOVER", "coords": [0.5, 0.5]}
+
+# ── Windows camera permission guard ──────────────────────────────────────────
+def _check_camera_windows(cap):
+    """
+    On Windows, VideoCapture() reports success even when camera privacy blocks
+    access — cap.read() just silently returns empty frames. Detect it early.
+    """
+    if sys.platform != "win32":
+        return True
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        print("\n❌  CAMERA BLOCKED — Windows privacy is denying access.\n")
+        print("    Fix:  Settings → Privacy & Security → Camera")
+        print("          ✓  Allow apps to access your camera")
+        print("          ✓  Allow desktop apps to access your camera\n")
+        print("    Then re-run this script.\n")
+        return False
+    return True
 
 # ==========================================
-# 👁️ THREAD 1: THE COMPUTER VISION ENGINE
+# 👁️  THREAD 1 — COMPUTER VISION ENGINE
 # ==========================================
 def vision_thread():
     global ai_state
-    
+
+    _ensure_model()
+
     cap = cv2.VideoCapture(0)
-    mp_hands = mp.solutions.hands
-    # min_tracking_confidence keeps the line smooth so it doesn't jitter
-    hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.7)
-    mp_draw = mp.solutions.drawing_utils
+    if not cap.isOpened():
+        print("\n❌  Cannot open camera (index 0).")
+        print("    Is another app (Teams, Zoom, OBS) using it?\n")
+        sys.exit(1)
+    if not _check_camera_windows(cap):
+        cap.release()
+        sys.exit(1)
 
-    print("📷 AI Vision Engine Started! Camera is warm.")
+    # ── New MediaPipe Tasks API ───────────────────────────────────────────────
+    # mp.solutions was removed in MediaPipe 0.10. Use mp.tasks instead.
+    BaseOptions        = mp.tasks.BaseOptions
+    HandLandmarker     = mp.tasks.vision.HandLandmarker
+    HandLandmarkerOpts = mp.tasks.vision.HandLandmarkerOptions
+    RunningMode        = mp.tasks.vision.RunningMode
 
-    while True:
-        success, frame = cap.read()
-        if not success:
-            continue
+    options = HandLandmarkerOpts(
+        base_options=BaseOptions(model_asset_path=MODEL_PATH),
+        running_mode=RunningMode.VIDEO,   # VIDEO mode tracks between frames
+        num_hands=1,
+        min_hand_detection_confidence=0.7,
+        min_hand_presence_confidence=0.7,
+        min_tracking_confidence=0.7,
+    )
 
-        # Flip the frame so it acts like a mirror
-        frame = cv2.flip(frame, 1)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = hands.process(rgb_frame)
+    print("📷  Vision engine running. Show your hand to the camera.")
+    print("    Gestures:")
+    print("      ☝️   Index only  →  DRAW")
+    print("      ✌️   Index + middle  →  HOVER (move cursor, no draw)")
+    print("      🖐️   Open hand  →  CLEAR canvas")
+    print("    Press ESC on the preview window to quit.\n")
 
-        # Default fallback states
-        current_state = "HOVER"
-        current_coords = ai_state["coords"]
+    start_ms = int(time.time() * 1000)
 
-        if result.multi_hand_landmarks:
-            for hand_landmarks in result.multi_hand_landmarks:
-                mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    with HandLandmarker.create_from_options(options) as detector:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                continue
 
-                # -- LANDMARK EXTRACTION --
-                # y-coordinates: Smaller numbers mean the finger is HIGHER up on the screen
-                idx_tip_y = hand_landmarks.landmark[8].y
-                idx_pip_y = hand_landmarks.landmark[6].y   # Index joint
-                
-                mid_tip_y = hand_landmarks.landmark[12].y
-                mid_pip_y = hand_landmarks.landmark[10].y  # Middle joint
-                
-                pinky_tip_y = hand_landmarks.landmark[20].y
-                pinky_pip_y = hand_landmarks.landmark[18].y # Pinky joint
+            frame  = cv2.flip(frame, 1)
+            rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            ts_ms  = int(time.time() * 1000) - start_ms
 
-                # The X and Y of the index finger tip is our cursor
-                idx_x = hand_landmarks.landmark[8].x
-                idx_y = hand_landmarks.landmark[8].y
-                current_coords = [idx_x, idx_y]
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = detector.detect_for_video(mp_img, ts_ms)
 
-                # -- GESTURE LOGIC --
-                # 1. CLEAR: If pinky, middle, and index are all up (Open Hand)
-                if pinky_tip_y < pinky_pip_y and mid_tip_y < mid_pip_y and idx_tip_y < idx_pip_y:
+            current_state  = "HOVER"
+            current_coords = ai_state["coords"]
+
+            if result.hand_landmarks:
+                lm = result.hand_landmarks[0]   # first (only) hand
+
+                # y-coords: smaller = higher on screen
+                idx_tip_y   = lm[8].y;  idx_pip_y   = lm[6].y
+                mid_tip_y   = lm[12].y; mid_pip_y   = lm[10].y
+                pinky_tip_y = lm[20].y; pinky_pip_y = lm[18].y
+
+                current_coords = [lm[8].x, lm[8].y]   # index fingertip = cursor
+
+                # CLEAR  — open hand (pinky + middle + index all up)
+                if (pinky_tip_y < pinky_pip_y
+                        and mid_tip_y < mid_pip_y
+                        and idx_tip_y < idx_pip_y):
                     current_state = "CLEAR"
-                
-                # 2. HOVER: If Middle finger is up AND Index is up (Peace Sign)
+                # HOVER  — peace sign (index + middle up)
                 elif mid_tip_y < mid_pip_y and idx_tip_y < idx_pip_y:
                     current_state = "HOVER"
-                
-                # 3. DRAW: If ONLY Index finger is up (Pointing)
+                # DRAW   — pointing (index only up)
                 elif idx_tip_y < idx_pip_y and mid_tip_y > mid_pip_y:
                     current_state = "DRAW"
 
-        # Safely update the global dictionary
-        ai_state["state"] = current_state
-        if current_state != "CLEAR":
-            ai_state["coords"] = current_coords
+                # Draw landmark dots on the developer preview
+                h, w = frame.shape[:2]
+                for pt in lm:
+                    cv2.circle(frame, (int(pt.x * w), int(pt.y * h)), 5, (0, 255, 0), -1)
 
-        # Show the developer preview window
-        cv2.imshow("Air Canvas - Developer View", frame)
-        
-        # Press 'ESC' on the video window to cleanly kill the camera
-        if cv2.waitKey(1) & 0xFF == 27:
-            break
+                # Label current gesture on preview
+                cv2.putText(frame, current_state, (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 255), 2)
+
+            ai_state["state"] = current_state
+            if current_state != "CLEAR":
+                ai_state["coords"] = current_coords
+
+            cv2.imshow("Air Canvas  —  Developer Preview  (ESC to quit)", frame)
+            if cv2.waitKey(1) & 0xFF == 27:
+                break
 
     cap.release()
     cv2.destroyAllWindows()
 
 # ==========================================
-# 🌐 THREAD 2: THE INTERNET BROADCASTER
+# 🌐  THREAD 2 — WEBSOCKET BROADCASTER
 # ==========================================
 async def handle_connection(websocket):
-    print("\n🔥 Frontend Connected! Streaming Live AI Data...")
+    print("🔥  Flutter client connected — streaming at ~30 fps …")
     try:
         while True:
-            # Package the global dictionary into a JSON string
-            packet = ai_state.copy()
-            
-            # Fire it to the Flutter app
-            await websocket.send(json.dumps(packet))
-            
-            # Lock the server to roughly 30 Frames Per Second
-            await asyncio.sleep(0.03)
-            
+            await websocket.send(json.dumps(ai_state.copy()))
+            await asyncio.sleep(1 / 30)
     except websockets.exceptions.ConnectionClosed:
-        print("\n❌ Frontend Disconnected.")
+        print("❌  Flutter client disconnected.")
 
 async def start_server():
     async with websockets.serve(handle_connection, "0.0.0.0", 8765):
-        print("🚀 Server Running on Port 8765")
+        print("🚀  WebSocket server listening on ws://localhost:8765")
         await asyncio.Future()
 
-# ==========================================
-# 🚀 LAUNCH SEQUENCE (MAC-SAFE)
-# ==========================================
 def run_server():
-    # asyncio needs its own loop when running in a background thread
     asyncio.run(start_server())
 
+# ==========================================
+# 🚀  LAUNCH
+# ==========================================
 if __name__ == "__main__":
-    # 1. Put the Internet Server in the background worker thread
-    server = threading.Thread(target=run_server, daemon=True)
-    server.start()
-    
-    # 2. Run the Camera engine on the MAIN thread so macOS allows the window!
+    # WebSocket server in a daemon thread so it dies when the main thread exits.
+    threading.Thread(target=run_server, daemon=True).start()
+
+    # Camera + OpenCV preview on the main thread.
+    # macOS requires GUI on the main thread; Windows works either way.
     vision_thread()

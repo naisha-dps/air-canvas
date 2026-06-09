@@ -17,6 +17,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -36,7 +37,7 @@ const Duration _kReconnectDelay = Duration(seconds: 2);
 const double _kReticleRadius = 14.0;
 
 // Minimum distance between successive draw points to avoid overdraw.
-const double _kMinPointDistance = 2.0;
+const double _kMinPointDistance = 5.0;
 
 // Stroke smoothing: we store raw points and use quadratic bezier splines.
 // Number of points to keep in a single "stroke segment" before starting fresh.
@@ -82,6 +83,12 @@ class _CanvasPageState extends State<CanvasPage> {
 
   /// Current gesture state received from Developer A.
   String _currentState = 'HOVER';
+
+  /// When the CLEAR pose started being held (null if not currently holding).
+  DateTime? _clearHoldStart;
+
+  /// How far through the 1-second hold the user is (0.0–1.0).
+  double _clearProgress = 0.0;
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -134,6 +141,12 @@ class _CanvasPageState extends State<CanvasPage> {
 
   void _onDone() {
     debugPrint('[AirCanvas] WebSocket closed by server.');
+    // Wipe any strokes so the screen is clean when the Python server stops.
+    setState(() {
+      _strokes.clear();
+      _activeStroke = [];
+      _currentState = 'HOVER';
+    });
     _scheduleReconnect();
   }
 
@@ -162,6 +175,14 @@ class _CanvasPageState extends State<CanvasPage> {
           )
         : _cursorNorm;
 
+    // Reset hold timer whenever pose leaves CLEAR.
+    if (state != 'CLEAR' && _clearHoldStart != null) {
+      setState(() {
+        _clearHoldStart = null;
+        _clearProgress = 0.0;
+      });
+    }
+
     // ── State machine ───────────────────────────────────────────────────────
     switch (state) {
       case 'HOVER':
@@ -171,7 +192,7 @@ class _CanvasPageState extends State<CanvasPage> {
         _handleDraw(cursorNorm);
         break;
       case 'CLEAR':
-        _handleClear();
+        _handleClear(cursorNorm);
         break;
       case 'SWIPE_L':
         _handleSwipe(left: true);
@@ -226,13 +247,32 @@ class _CanvasPageState extends State<CanvasPage> {
     });
   }
 
-  void _handleClear() {
-    setState(() {
-      _strokes.clear();
-      _activeStroke = [];
-      _currentState = 'HOVER';
-    });
-    debugPrint('[AirCanvas] Canvas cleared.');
+  void _handleClear(Offset norm) {
+    final now = DateTime.now();
+    _clearHoldStart ??= now;
+
+    final double elapsed =
+        now.difference(_clearHoldStart!).inMilliseconds / 1000.0;
+    final double progress = elapsed.clamp(0.0, 1.0);
+
+    if (progress >= 1.0) {
+      // Hold complete — wipe the canvas and reset the timer.
+      _clearHoldStart = null;
+      setState(() {
+        _strokes.clear();
+        _activeStroke = [];
+        _currentState = 'HOVER';
+        _clearProgress = 0.0;
+        _cursorNorm = norm;
+      });
+      debugPrint('[AirCanvas] Canvas cleared.');
+    } else {
+      setState(() {
+        _currentState = 'CLEAR';
+        _clearProgress = progress;
+        _cursorNorm = norm;
+      });
+    }
   }
 
   Future<void> _handleSwipe({required bool left}) async {
@@ -241,7 +281,14 @@ class _CanvasPageState extends State<CanvasPage> {
       _strokes.add(List.from(_activeStroke));
       _activeStroke = [];
     }
-    _handleClear(); // Clear canvas on slide change (common UX expectation).
+    // Immediate clear on slide change — no hold required.
+    setState(() {
+      _strokes.clear();
+      _activeStroke = [];
+      _currentState = 'HOVER';
+      _clearHoldStart = null;
+      _clearProgress = 0.0;
+    });
 
     final String method = left ? 'swipeLeft' : 'swipeRight';
     debugPrint('[AirCanvas] Invoking native channel → $method');
@@ -275,19 +322,25 @@ class _CanvasPageState extends State<CanvasPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
+      // StackFit.expand forces the Stack — and every non-positioned child —
+      // to fill the Scaffold body (= the full screen). This gives CustomPaint
+      // an exact pixel-accurate canvas size that matches _screenSize.
+      //
+      // RepaintBoundary is intentionally absent: on Windows it allocates an
+      // offscreen bitmap that may not carry an alpha channel, turning the
+      // transparent background opaque and hiding the overlay effect.
       body: Stack(
+        fit: StackFit.expand,
         children: [
           // ── Main drawing canvas ──────────────────────────────────────────
-          RepaintBoundary(
-            child: CustomPaint(
-              painter: AirCanvasPainter(
-                strokes: _strokes,
-                activeStroke: _activeStroke,
-                cursorNorm: _cursorNorm,
-                currentState: _currentState,
-                screenSize: _screenSize,
-              ),
-              size: Size.infinite,
+          CustomPaint(
+            painter: AirCanvasPainter(
+              strokes: _strokes,
+              activeStroke: _activeStroke,
+              cursorNorm: _cursorNorm,
+              currentState: _currentState,
+              screenSize: _screenSize,
+              clearProgress: _clearProgress,
             ),
           ),
 
@@ -314,6 +367,7 @@ class AirCanvasPainter extends CustomPainter {
   final Offset cursorNorm;
   final String currentState;
   final Size screenSize;
+  final double clearProgress;
 
   const AirCanvasPainter({
     required this.strokes,
@@ -321,6 +375,7 @@ class AirCanvasPainter extends CustomPainter {
     required this.cursorNorm,
     required this.currentState,
     required this.screenSize,
+    required this.clearProgress,
   });
 
   @override
@@ -341,6 +396,11 @@ class AirCanvasPainter extends CustomPainter {
       cursorNorm.dy * size.height,
     );
     _drawReticle(canvas, cursor);
+
+    // ── Draw hold-to-clear progress ring ────────────────────────────────────
+    if (currentState == 'CLEAR' && clearProgress > 0.0) {
+      _drawClearTimer(canvas, cursor);
+    }
   }
 
   // ── Stroke rendering ───────────────────────────────────────────────────────
@@ -349,9 +409,9 @@ class AirCanvasPainter extends CustomPainter {
     // Committed strokes are slightly faded; active is full opacity.
     final Paint strokePaint = Paint()
       ..color = committed
-          ? const Color(0xCCFF4444) // soft red, slightly transparent
-          : const Color(0xFFFF4444) // full red while drawing
-      ..strokeWidth = 3.5
+          ? const Color(0xCCFFCBA4) // faded peach for committed strokes
+          : const Color(0xFFFFCBA4) // full peach while actively drawing
+      ..strokeWidth = 6.0
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke
@@ -405,54 +465,61 @@ class AirCanvasPainter extends CustomPainter {
 
   void _drawReticle(Canvas canvas, Offset center) {
     final bool isDrawing = currentState == 'DRAW';
+    final bool isClearing = currentState == 'CLEAR';
 
-    // ── Outer ring ──────────────────────────────────────────────────────────
-    final Paint ringPaint = Paint()
-      ..color = isDrawing
-          ? const Color(0xCCFF4444) // red when drawing
-          : const Color(0xCC44FF88) // green when hovering
-      ..strokeWidth = 2.0
+    final Color dotColor = isDrawing
+        ? const Color(0xFFFFCBA4)
+        : isClearing
+            ? const Color(0xFFFF8C00)
+            : const Color(0xFF44FF88);
+
+    canvas.drawCircle(
+      center,
+      6.0,
+      Paint()
+        ..color = dotColor
+        ..style = PaintingStyle.fill
+        ..isAntiAlias = true,
+    );
+  }
+
+  // ── Clear-hold progress ring ───────────────────────────────────────────────
+
+  void _drawClearTimer(Canvas canvas, Offset center) {
+    const double radius = _kReticleRadius + 10.0;
+    final Paint trackPaint = Paint()
+      ..color = const Color(0x33FF8C00) // faint orange track
+      ..strokeWidth = 4.0
       ..style = PaintingStyle.stroke
       ..isAntiAlias = true;
 
-    canvas.drawCircle(center, _kReticleRadius, ringPaint);
-
-    // ── Inner dot ───────────────────────────────────────────────────────────
-    final Paint dotPaint = Paint()
-      ..color = isDrawing
-          ? const Color(0xFFFF4444)
-          : const Color(0xFF44FF88)
-      ..style = PaintingStyle.fill
-      ..isAntiAlias = true;
-
-    canvas.drawCircle(center, 3.0, dotPaint);
-
-    // ── Crosshair lines ──────────────────────────────────────────────────────
-    final double arm = _kReticleRadius + 6.0;
-    final Paint crossPaint = Paint()
-      ..color = (isDrawing
-              ? const Color(0xCCFF4444)
-              : const Color(0xCC44FF88))
-          .withOpacity(0.6)
-      ..strokeWidth = 1.5
+    final Paint arcPaint = Paint()
+      ..color = const Color(0xFFFF8C00) // solid orange fill arc
+      ..strokeWidth = 4.0
+      ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..isAntiAlias = true;
 
-    // Horizontal
-    canvas.drawLine(
-        Offset(center.dx - arm, center.dy), Offset(center.dx + arm, center.dy), crossPaint);
-    // Vertical
-    canvas.drawLine(
-        Offset(center.dx, center.dy - arm), Offset(center.dx, center.dy + arm), crossPaint);
+    // Full ghost circle.
+    canvas.drawCircle(center, radius, trackPaint);
+
+    // Filled arc from top, sweeping clockwise.
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      clearProgress * 2 * math.pi,
+      false,
+      arcPaint,
+    );
   }
 
   @override
   bool shouldRepaint(AirCanvasPainter old) {
-    // Repaint whenever any state changes.
     return old.strokes != strokes ||
         old.activeStroke != activeStroke ||
         old.cursorNorm != cursorNorm ||
-        old.currentState != currentState;
+        old.currentState != currentState ||
+        old.clearProgress != clearProgress;
   }
 }
 
@@ -471,7 +538,7 @@ class _ConnectionBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.45),
+        color: const Color(0x73000000),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(

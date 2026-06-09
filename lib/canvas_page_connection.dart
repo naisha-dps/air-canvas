@@ -318,7 +318,7 @@ class AirCanvasPainter extends CustomPainter {
 
     final double arm = _kReticleRadius + 6.0;
     final Paint crossPaint = Paint()
-      ..color = (isDrawing ? const Color(0xCCFF4444) : const Color(0xCC44FF88)).withOpacity(0.6)
+      ..color = isDrawing ? const Color(0x99FF4444) : const Color(0x9944FF88)
       ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round
       ..isAntiAlias = true;
@@ -342,7 +342,7 @@ class _ConnectionBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.45),
+        color: const Color(0x73000000),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(

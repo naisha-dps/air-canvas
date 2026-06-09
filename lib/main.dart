@@ -25,28 +25,26 @@ Future<void> main() async {
   // ── window_manager bootstrap ──────────────────────────────────────────────
   await windowManager.ensureInitialized();
 
+  // No explicit size — main.cpp already starts the window at SM_CXSCREEN ×
+  // SM_CYSCREEN so it fills the primary monitor from the first frame.
   const WindowOptions windowOptions = WindowOptions(
-    // Let Flutter determine the size; we force fullscreen below.
-    size: Size(1920, 1080),
-    // Transparent background – required so only the drawn strokes are visible.
     backgroundColor: Colors.transparent,
-    // No title bar, resize handles, or drop shadow.
     titleBarStyle: TitleBarStyle.hidden,
-    // Always render on top of every other application.
     alwaysOnTop: true,
-    // Removes the window frame entirely.
     skipTaskbar: true,
     windowButtonVisibility: false,
   );
 
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
-    // ── Make the window truly fullscreen ──────────────────────────────────
-    await windowManager.setFullScreen(true);
-
-    // ── CRITICAL: Pass all mouse / pointer events through to the layer below.
-    // This allows the presenter to interact normally with PowerPoint while
-    // our canvas overlay is active.
-    await windowManager.setIgnoreMouseEvents(true);
+    // setAsFrameless() removes the title bar and border for an overlay window.
+    // Prefer this over setFullScreen(true), which uses exclusive fullscreen
+    // mode and can prevent other windows from rendering on top.
+    await windowManager.setAsFrameless();
+    await windowManager.setAlwaysOnTop(true);
+    // Click-through is handled via WM_NCHITTEST in win32_window.cpp and
+    // flutter_window.cpp — we do NOT call setIgnoreMouseEvents(true) because
+    // it adds WS_EX_LAYERED without SetLayeredWindowAttributes, which makes
+    // the entire Flutter rendering surface invisible on Windows 10/11.
 
     await windowManager.show();
     await windowManager.focus();
