@@ -1,0 +1,28 @@
+^D:\MAJIK\AIR-CANVAS\BUILD\WINDOWS\X64\CMAKEFILES\495628D8609E022F9306F91F45F8B6C0\FLUTTER_WINDOWS.DLL.RULE
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E env FLUTTER_ROOT=C:\Users\abhin\flutter PROJECT_DIR=D:\majik\air-canvas FLUTTER_ROOT=C:\Users\abhin\flutter FLUTTER_EPHEMERAL_DIR=D:\majik\air-canvas\windows\flutter\ephemeral PROJECT_DIR=D:\majik\air-canvas FLUTTER_TARGET=D:\majik\air-canvas\lib\main.dart DART_DEFINES=RkxVVFRFUl9WRVJTSU9OPTMuNDQuMQ==,RkxVVFRFUl9DSEFOTkVMPXN0YWJsZQ==,RkxVVFRFUl9HSVRfVVJMPWh0dHBzOi8vZ2l0aHViLmNvbS9mbHV0dGVyL2ZsdXR0ZXIuZ2l0,RkxVVFRFUl9GUkFNRVdPUktfUkVWSVNJT049OTI0MTM0YTQ0Yw==,RkxVVFRFUl9FTkdJTkVfUkVWSVNJT049YzQxNmFjZmViOA==,RkxVVFRFUl9EQVJUX1ZFUlNJT049My4xMi4x DART_OBFUSCATION=false TRACK_WIDGET_CREATION=true TREE_SHAKE_ICONS=false PACKAGE_CONFIG=D:\majik\air-canvas\.dart_tool\package_config.json C:/Users/abhin/flutter/packages/flutter_tools/bin/tool_backend.bat windows-x64 Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\MAJIK\AIR-CANVAS\BUILD\WINDOWS\X64\CMAKEFILES\B1EC0B14045970087F5A82D578ABB988\FLUTTER_ASSEMBLE.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^D:\MAJIK\AIR-CANVAS\WINDOWS\FLUTTER\CMAKELISTS.TXT
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SD:/majik/air-canvas/windows -BD:/majik/air-canvas/build/windows/x64 --check-stamp-file D:/majik/air-canvas/build/windows/x64/flutter/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
